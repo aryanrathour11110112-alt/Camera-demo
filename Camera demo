@@ -1,0 +1,160 @@
+>!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>My Two-Phone Video Demo</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { margin:0; font:16px system-ui, sans-serif; background:#10131a; color:#f4f6fb; }
+    main { max-width:760px; margin:auto; padding:20px; }
+    h1 { font-size:1.55rem; }
+    p { line-height:1.5; color:#c8cfdd; }
+    .notice { background:#202838; border:1px solid #45516a; padding:12px; border-radius:12px; }
+    .controls { display:grid; gap:10px; margin:16px 0; }
+    input, button { font:inherit; border-radius:10px; padding:12px; }
+    input { min-width:0; background:#0b0e14; color:#fff; border:1px solid #59657c; }
+    button { border:0; background:#70e0b0; color:#08130e; font-weight:700; }
+    button:disabled { opacity:.5; }
+    .videos { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:12px; }
+    figure { margin:0; background:#1a202c; padding:10px; border-radius:12px; }
+    video { width:100%; aspect-ratio:4/3; background:#050608; border-radius:8px; object-fit:cover; }
+    figcaption { padding:7px 0 0; color:#d7ddeb; }
+    #status { white-space:pre-wrap; }
+    .small { font-size:.9rem; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Two-Phone Live Video Demo</h1>
+  <p class="notice"><strong>Privacy:</strong> Camera starts only after you tap “Start camera” and approve the browser prompt. Video is shared only after you choose to connect. Keep the page visible and use it only on your own devices or with the other person's clear permission.</p>
+
+  <div class="controls">
+    <button id="start">1. Start camera</button>
+    <label for="peerId">2. Other phone's Peer ID</label>
+    <input id="peerId" autocomplete="off" placeholder="Paste the other phone's ID here">
+    <button id="call" disabled>3. Connect video</button>
+    <button id="hangup" disabled>End video connection</button>
+  </div>
+
+  <p><strong>Your Peer ID:</strong> <span id="myId">Connecting…</span></p>
+  <p id="status" role="status">Open this page on both phones. On each phone, tap Start camera and allow camera/microphone. Then copy one phone's Peer ID into the other phone and tap Connect video.</p>
+
+  <div class="videos">
+    <figure><video id="localVideo" autoplay playsinline muted></video><figcaption>Your camera preview</figcaption></figure>
+    <figure><video id="remoteVideo" autoplay playsinline></video><figcaption>Other phone's video</figcaption></figure>
+  </div>
+  <p class="small">This demo uses PeerJS's public signaling service and a direct WebRTC connection when possible. Network/firewall restrictions may prevent it from connecting. Do not use it for sensitive video.</p>
+</main>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script>
+(() => {
+  const startBtn = document.getElementById('start');
+  const callBtn = document.getElementById('call');
+  const hangupBtn = document.getElementById('hangup');
+  const peerIdEl = document.getElementById('peerId');
+  const myIdEl = document.getElementById('myId');
+  const statusEl = document.getElementById('status');
+  const localVideo = document.getElementById('localVideo');
+  const remoteVideo = document.getElementById('remoteVideo');
+
+  let peer = null;
+  let localStream = null;
+  let activeCall = null;
+
+  function status(message) { statusEl.textContent = message; }
+  function setConnected(connected) {
+    hangupBtn.disabled = !connected;
+    callBtn.disabled = !localStream || connected;
+  }
+  function endCall() {
+    if (activeCall) {
+      try { activeCall.close(); } catch (_) {}
+      activeCall = null;
+    }
+    remoteVideo.srcObject = null;
+    setConnected(false);
+    status('Video connection ended. Your local camera preview may still be on; tap Stop camera to turn it off.');
+  }
+  function attachCall(call) {
+    if (!localStream) {
+      status('Incoming video request. Tap Start camera first, then reconnect from the other phone.');
+      call.close();
+      return;
+    }
+    if (activeCall) activeCall.close();
+    activeCall = call;
+    call.answer(localStream);
+    call.on('stream', stream => {
+      remoteVideo.srcObject = stream;
+      remoteVideo.play().catch(() => {});
+      setConnected(true);
+      status('Connected. Video is being shared between the two phones.');
+    });
+    call.on('close', () => {
+      activeCall = null;
+      remoteVideo.srcObject = null;
+      setConnected(false);
+      status('The other phone ended the connection.');
+    });
+    call.on('error', err => {
+      status('Call error: ' + (err && err.message ? err.message : 'connection failed'));
+      endCall();
+    });
+  }
+
+  if (!window.Peer) {
+    status('PeerJS could not load. Check your internet connection and reload this page.');
+    startBtn.disabled = true;
+  } else {
+    peer = new Peer();
+    peer.on('open', id => { myIdEl.textContent = id; });
+    peer.on('call', attachCall);
+    peer.on('error', err => {
+      status('Connection setup error: ' + (err && err.message ? err.message : 'please reload and try again'));
+    });
+    peer.on('disconnected', () => status('Signaling disconnected. Check internet and reload if needed.'));
+  }
+
+  startBtn.addEventListener('click', async () => {
+    if (localStream) {
+      localStream.getTracks().forEach(track => track.stop());
+      localStream = null;
+      localVideo.srcObject = null;
+      startBtn.textContent = '1. Start camera';
+      callBtn.disabled = true;
+      status('Camera and microphone stopped.');
+      return;
+    }
+    try {
+      localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      localVideo.srcObject = localStream;
+      startBtn.textContent = 'Stop camera';
+      callBtn.disabled = false;
+      status('Camera is on. Copy your Peer ID to the other phone, or paste the other phone’s ID below.');
+    } catch (err) {
+      status('Camera/microphone permission was not granted, or the device has no available camera. Open this page over HTTPS and allow permissions in browser settings.');
+    }
+  });
+
+  callBtn.addEventListener('click', () => {
+    const otherId = peerIdEl.value.trim();
+    if (!localStream) { status('First tap Start camera and allow permission.'); return; }
+    if (!otherId) { status('Paste the other phone’s Peer ID first.'); return; }
+    if (otherId === peer.id) { status('Enter the ID from the other phone, not your own ID.'); return; }
+    status('Calling the other phone… make sure its page is open and its camera is started.');
+    const call = peer.call(otherId, localStream);
+    if (!call) { status('Could not start the call. Check the Peer ID and internet connection.'); return; }
+    attachCall(call);
+  });
+
+  hangupBtn.addEventListener('click', endCall);
+  window.addEventListener('beforeunload', () => {
+    if (activeCall) activeCall.close();
+    if (localStream) localStream.getTracks().forEach(track => track.stop());
+    if (peer) peer.destroy();
+  });
+})();
+</script>
+</body>
+</html>
